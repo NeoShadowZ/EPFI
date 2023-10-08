@@ -1,6 +1,7 @@
 # Image files
 *.jpg
 *.png
+testimages/
 
 # Visual Studio files
 .vscode/

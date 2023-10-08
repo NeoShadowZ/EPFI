@@ -7,12 +7,13 @@ using System.Runtime.Versioning;
 
 [SupportedOSPlatform("windows")] internal sealed class Program
 {
-    enum ColorFormatting{RGB, HSV, HEX}
     unsafe record BitmapLockMetadata(int width, int height, nint scanPointer, int bypp, int stride)
     {
         public byte* scan0 => (byte*)scanPointer; // A pointer cannot be a record field so we do this hack
     }
-    
+    enum ColorFormatting{RGB, HSV, HEX}
+    const int MAX_COLORDIST = 195075, MAX_QUANTIZEROFFSET = 10_000;
+    const string SAVE_EXT = ".png";
 
     static RootCommand CreateRootCommand()
     {
@@ -20,23 +21,26 @@ using System.Runtime.Versioning;
         
         Argument<FileInfo> arg_path = new("path", "The path to the image that will have its pallete extracted");
         Argument<int> arg_colors = new("pallete-size", "The amount of colors the pallete will have. It cannot exceed the total colors in the image");
+        Option<int> opt_tolerance = new("--similarity-tolerance", () => 50, $"How different 2 colors must be to be part of the pallete, bigger numbers are more restrictive. Ranges from 0 to {MAX_COLORDIST}");
+
+        opt_tolerance.AddAlias("-t");
 
 
         Command cmd_outputMode1 = new("text", "Outputs the color pallete as a set of color codes");
 
-        Option<ColorFormatting> opt_colorcodeF = new("--color-formatting", () => ColorFormatting.RGB, "Specifies in which format the color codes will be printed");
-        opt_colorcodeF.AddAlias("-t");
+        Option<ColorFormatting> opt_colorcodeF = new("--formatting-mode", () => ColorFormatting.RGB, "Specifies in which format the color codes will be printed");
+        opt_colorcodeF.AddAlias("-m");
 
         cmd_outputMode1.Add(arg_path);
         cmd_outputMode1.Add(arg_colors);
         cmd_outputMode1.Add(opt_colorcodeF);
 
-        cmd_outputMode1.SetHandler(Handler_TextOutput, arg_path, arg_colors, opt_colorcodeF);
+        cmd_outputMode1.SetHandler(Handler_TextOutput, arg_path, arg_colors, opt_tolerance, opt_colorcodeF);
 
 
-        Command cmd_outputMode2 = new("file", "Outputs the color pallete to a .bmp file");
+        Command cmd_outputMode2 = new("file", $"Outputs the color pallete to a {SAVE_EXT} file");
 
-        Option<FileInfo> opt_savePath = new("--output-path", () => new("output.bmp"), "Specifies where the pallete will be saved");
+        Option<FileInfo> opt_savePath = new("--output-path", () => new($"output{SAVE_EXT}"), "Specifies where the pallete will be saved");
         Option<int> opt_x = new("--stripe-width", () => 50, "Specifies the pixel width of each of the vertical color bands that will form the pallete");
         Option<int> opt_y = new("--height", () => 100, "Specifies the pixel height of the image the pallete will be saved to");
 
@@ -50,17 +54,20 @@ using System.Runtime.Versioning;
         cmd_outputMode2.Add(opt_x);
         cmd_outputMode2.Add(opt_y);
 
-        cmd_outputMode2.SetHandler(Handler_ImageOutput, arg_path, arg_colors, opt_savePath, opt_x, opt_y);
+        cmd_outputMode2.SetHandler(Handler_ImageOutput, arg_path, arg_colors, opt_tolerance, opt_savePath, opt_x, opt_y);
          
         rootCommand.Add(cmd_outputMode1);
         rootCommand.Add(cmd_outputMode2);
+        rootCommand.AddGlobalOption(opt_tolerance);
 
         return rootCommand;
     }
     
-    // quantizerAmountColorOffset is a recursion parameter and should not be modified when calling the function externally
-    static Color[] GetSimplifiedPallete(Bitmap source, int palleteSize, int quantizerColorAmountOffset = 0)
+    // quantizerOffset is a recursion parameter and should not be modified when calling the function externally
+    static Color[] GetSimplifiedPallete(Bitmap source, int palleteSize, int cleanupStrength, int quantizerOffset = 0)
     {    
+        Color[] bannedColors = {Color.FromArgb(0, 0, 0), Color.FromArgb(255, 255, 255)};
+        
         double CalculateColorEucledianDistance(Color c1, Color c2) // max dist is 195075
         {
             double 
@@ -86,17 +93,19 @@ using System.Runtime.Versioning;
             return output.Where(c => c is not null).Select(c => (Color)c!).ToArray();
         }
         
+        if(palleteSize == 0) Crash("Cannot create a pallete of size 0.");
+        if(quantizerOffset > MAX_QUANTIZEROFFSET) Crash("Failure when attempting to create pallete - Please choose a smaller size.");
+        
         using MemoryStream stream = new();
         source.Save(stream, ImageFormat.Png);
         stream.Seek(0, SeekOrigin.Begin);
         
         using MagickImage image = new(stream);
-        if(palleteSize > image.Histogram().Count()) Crash("Pallete requested is too large.");
-        image.Quantize(new QuantizeSettings{Colors = palleteSize + quantizerColorAmountOffset});
-        // Color.FromArgb(Color.Black.ToArgb()) is an absolute hack but it is done because { Color.Black == [A = 255 R = 0 G = 0 B = 0] } evaluates to false for some godforsaken reason
-        Color[] pallete = CleanSimilarColorsFromList(image.Histogram().Distinct().OrderBy(h => h.Value).Select(h => h.Key.ToByteArray()).Select(b => Color.FromArgb(b[0], b[1], b[2])).Where(c => c != Color.FromArgb(Color.Black.ToArgb())).ToArray(), 50).Take(palleteSize).ToArray();
+        if(palleteSize >= image.Histogram().Count()) Crash("Pallete requested is too large.");
+        image.Quantize(new QuantizeSettings{Colors = palleteSize + quantizerOffset});
+        Color[] pallete = CleanSimilarColorsFromList(image.Histogram().Distinct().OrderBy(h => h.Value).Select(h => h.Key.ToByteArray()).Select(b => Color.FromArgb(b[0], b[1], b[2])).Where(c => !bannedColors.Contains(c)).ToArray(), Math.Clamp(cleanupStrength, 0, MAX_COLORDIST)).Take(palleteSize).ToArray();
         
-        if(pallete.Length < palleteSize) pallete = GetSimplifiedPallete(source, palleteSize, quantizerColorAmountOffset + 1);
+        if(pallete.Length < palleteSize) pallete = GetSimplifiedPallete(source, palleteSize, quantizerOffset + 1);
         return pallete;
     }
   
@@ -129,7 +138,7 @@ using System.Runtime.Versioning;
         return image;
     }
     
-    static void Handler_TextOutput(FileInfo read, int palleteSize, ColorFormatting formatting)
+    static void Handler_TextOutput(FileInfo read, int palleteSize, int dissimilarity, ColorFormatting formatting)
     {
         (double h, double s, double v) ColorToHSV(Color color)
         {
@@ -146,7 +155,7 @@ using System.Runtime.Versioning;
         using FileStream fs = read.OpenRead(); 
         using Bitmap loadedImage = new(fs);
 
-        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize);
+        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize, dissimilarity);
         StringBuilder result = new();
 
         foreach(Color color in pallete) switch(formatting)
@@ -164,26 +173,27 @@ using System.Runtime.Versioning;
         Console.Write(result.ToString());
     }
 
-    static void Handler_ImageOutput(FileInfo read, int palleteSize, FileInfo save, int stripeWidth, int stripeHeight)
+    static void Handler_ImageOutput(FileInfo read, int palleteSize, int dissimilarity, FileInfo save, int stripeWidth, int stripeHeight)
     {       
         string savePath = save.FullName;
         if(savePath.Contains('.')) savePath = savePath.Substring(0, savePath.LastIndexOf('.'));
         if(File.Exists(save.FullName))
         {
             int counter = 1;
-            for(; File.Exists($"{savePath}({counter}).bmp"); counter++); // we wait
-            savePath += $"({counter}).bmp";
+            for(;File.Exists($"{savePath}({counter}){SAVE_EXT}"); counter++); // we wait
+            savePath += $"({counter}){SAVE_EXT}";
         }
-        else savePath += ".bmp";
+        else savePath += SAVE_EXT;
         
         if(!read.Exists) Crash("File specified does not exist");
 
         using FileStream fs = read.OpenRead(); 
         using Bitmap loadedImage = new(fs);
 
-        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize);
+        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize, dissimilarity);
+        if(pallete.Length == 0) Crash("Unexpected error - Pallete was empty.");
         using Bitmap output = CreateStripedImage(stripeWidth, stripeHeight, pallete);
-        output.Save(savePath, ImageFormat.Bmp);
+        output.Save(savePath, ImageFormat.Png);
     }
 
     static void Crash(object message)
