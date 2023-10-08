@@ -1,7 +1,6 @@
 ﻿using System.Text;
 using System.Drawing;
 using System.Drawing.Imaging;
-using ImageMagick;
 using System.CommandLine;
 using System.Runtime.Versioning;
 
@@ -12,7 +11,7 @@ using System.Runtime.Versioning;
         public byte* scan0 => (byte*)scanPointer; // A pointer cannot be a record field so we do this hack
     }
     enum ColorFormatting{RGB, HSV, HEX}
-    const int MAX_COLORDIST = 195075, MAX_QUANTIZEROFFSET = 10_000;
+    const int MAX_COLORDIST = 195075;
     const string SAVE_EXT = ".png";
 
     static RootCommand CreateRootCommand()
@@ -63,10 +62,36 @@ using System.Runtime.Versioning;
         return rootCommand;
     }
     
-    // quantizerOffset is a recursion parameter and should not be modified when calling the function externally
-    static Color[] GetSimplifiedPallete(Bitmap source, int palleteSize, int cleanupStrength, int quantizerOffset = 0)
-    {    
-        Color[] bannedColors = {Color.FromArgb(0, 0, 0), Color.FromArgb(255, 255, 255)};
+    static Color[] GetSimplifiedPallete(Bitmap source, int palleteSize, int cleanupStrength)
+    {        
+        Color[] GetColorsInImage(Bitmap image)
+        { 
+            Dictionary<Color, int> colorFrequencies = new();
+            BitmapData bitmapData = image.LockBits(new(0, 0, image.Width, image.Height), ImageLockMode.ReadOnly, image.PixelFormat);
+            BitmapLockMetadata lockData = new(image.Width, image.Height, bitmapData.Scan0, Bitmap.GetPixelFormatSize(image.PixelFormat) / 8, bitmapData.Stride);
+
+            // we cannot do parallelism on this section because for some unknown reason it is ever so slightly inconsistent and we fucking hate that
+            unsafe
+            {
+                for(int x = 0; x < image.Width; x++) for(int y = 0; y < image.Height; y++)
+                {
+                    int offset = x * lockData.bypp + y * lockData.stride;
+                    // mod 4 is a bit of a hack to check if the image supports transparency by having the bytes per pixel be divisible by 4
+                    if(lockData.bypp % 4 == 0 && lockData.scan0[offset + 3] < 255) continue;
+                    Color readColor = Color.FromArgb
+                    (
+                        lockData.scan0[offset + 2],
+                        lockData.scan0[offset + 1],
+                        lockData.scan0[offset]
+                    );
+                    if(colorFrequencies.ContainsKey(readColor)) colorFrequencies[readColor]++;
+                    else colorFrequencies.Add(readColor, 0);
+                }
+            }
+
+            image.UnlockBits(bitmapData);
+            return colorFrequencies.OrderBy(kvp => kvp.Value).Select(kvp => kvp.Key).Distinct().ToArray();
+        }
         
         double CalculateColorEucledianDistance(Color c1, Color c2) // max dist is 195075
         {
@@ -94,19 +119,15 @@ using System.Runtime.Versioning;
         }
         
         if(palleteSize == 0) Crash("Cannot create a pallete of size 0.");
-        if(quantizerOffset > MAX_QUANTIZEROFFSET) Crash("Failure when attempting to create pallete - Please choose a smaller size.");
+
+        Color[] fullPallete = GetColorsInImage(source);
+
+        if(palleteSize > fullPallete.Length) palleteSize = fullPallete.Length;
+
+        Color[] cleanedPallete = CleanSimilarColorsFromList(fullPallete, cleanupStrength);
+        if(cleanedPallete.Length < palleteSize) for(int i = cleanupStrength; i == 0 || cleanedPallete.Length > palleteSize; i--) cleanedPallete = CleanSimilarColorsFromList(fullPallete, i);
         
-        using MemoryStream stream = new();
-        source.Save(stream, ImageFormat.Png);
-        stream.Seek(0, SeekOrigin.Begin);
-        
-        using MagickImage image = new(stream);
-        if(palleteSize >= image.Histogram().Count()) Crash("Pallete requested is too large.");
-        image.Quantize(new QuantizeSettings{Colors = palleteSize + quantizerOffset});
-        Color[] pallete = CleanSimilarColorsFromList(image.Histogram().Distinct().OrderBy(h => h.Value).Select(h => h.Key.ToByteArray()).Select(b => Color.FromArgb(b[0], b[1], b[2])).Where(c => !bannedColors.Contains(c)).ToArray(), Math.Clamp(cleanupStrength, 0, MAX_COLORDIST)).Take(palleteSize).ToArray();
-        
-        if(pallete.Length < palleteSize) pallete = GetSimplifiedPallete(source, palleteSize, quantizerOffset + 1);
-        return pallete;
+        return cleanedPallete.Take(palleteSize).OrderBy(c => c.GetHue()).ToArray();
     }
   
     static Bitmap CreateStripedImage(int stripeWidth, int height, params Color[] stripeColors)
@@ -191,7 +212,7 @@ using System.Runtime.Versioning;
         using Bitmap loadedImage = new(fs);
 
         Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize, dissimilarity);
-        if(pallete.Length == 0) Crash("Unexpected error - Pallete was empty.");
+        if(pallete.Length == 0) Crash("Unexpected error.");
         using Bitmap output = CreateStripedImage(stripeWidth, stripeHeight, pallete);
         output.Save(savePath, ImageFormat.Png);
     }
