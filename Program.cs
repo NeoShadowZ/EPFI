@@ -16,16 +16,16 @@ using System.Runtime.Versioning;
 
     static RootCommand CreateRootCommand()
     {
-        RootCommand rootCommand = new("EPFI - Extract pallette From Image");
+        RootCommand rootCommand = new("EPFI - Extract Pallete From Image");
         
-        Argument<FileInfo> arg_path = new("path", "The path to the image that will have its pallette extracted");
-        Argument<int> arg_colors = new("pallette-size", "The amount of colors the pallette will have. It cannot exceed the total colors in the image");
-        Option<int> opt_tolerance = new("--similarity-tolerance", () => 50, $"How different 2 colors must be to be part of the pallette, bigger numbers are more restrictive. Ranges from 0 to {MAX_COLORDIST}");
+        Argument<FileInfo> arg_path = new("path", "The path to the image that will have its pallete extracted");
+        Argument<int> arg_colors = new("pallete-size", "The amount of colors the pallete will have. It cannot exceed the total colors in the image");
+        Option<int> opt_tolerance = new("--similarity-tolerance", () => 50, $"How different 2 colors must be to be part of the pallete, bigger numbers are more restrictive. Ranges from 0 to {MAX_COLORDIST}");
 
         opt_tolerance.AddAlias("-t");
 
 
-        Command cmd_outputMode1 = new("text", "Outputs the color pallette as a set of color codes");
+        Command cmd_outputMode1 = new("text", "Outputs the color pallete as a set of color codes");
 
         Option<ColorFormatting> opt_colorcodeF = new("--formatting-mode", () => ColorFormatting.RGB, "Specifies in which format the color codes will be printed");
         opt_colorcodeF.AddAlias("-m");
@@ -37,11 +37,11 @@ using System.Runtime.Versioning;
         cmd_outputMode1.SetHandler(Handler_TextOutput, arg_path, arg_colors, opt_tolerance, opt_colorcodeF);
 
 
-        Command cmd_outputMode2 = new("file", $"Outputs the color pallette to a {SAVE_EXT} file");
+        Command cmd_outputMode2 = new("file", $"Outputs the color pallete to a {SAVE_EXT} file");
 
-        Option<FileInfo> opt_savePath = new("--output-path", () => new($"output{SAVE_EXT}"), "Specifies where the pallette will be saved");
-        Option<int> opt_x = new("--stripe-width", () => 50, "Specifies the pixel width of each of the vertical color bands that will form the pallette");
-        Option<int> opt_y = new("--height", () => 100, "Specifies the pixel height of the image the pallette will be saved to");
+        Option<FileInfo> opt_savePath = new("--output-path", () => new($"output{SAVE_EXT}"), "Specifies where the pallete will be saved");
+        Option<int> opt_x = new("--stripe-width", () => 50, "Specifies the pixel width of each of the vertical color bands that will form the pallete");
+        Option<int> opt_y = new("--height", () => 100, "Specifies the pixel height of the image the pallete will be saved to");
 
         opt_savePath.AddAlias("-o");
         opt_x.AddAlias("-w");
@@ -62,7 +62,7 @@ using System.Runtime.Versioning;
         return rootCommand;
     }
     
-    static Color[] GetSimplifiedpallette(Bitmap source, int palletteSize, int cleanupStrength)
+    static Color[] GetSimplifiedPallete(Bitmap source, int palleteSize, int cleanupStrength)
     {        
         Color[] GetColorsInImage(Bitmap image)
         { 
@@ -118,16 +118,16 @@ using System.Runtime.Versioning;
             return output.Where(c => c is not null).Select(c => (Color)c!).ToArray();
         }
         
-        if(palletteSize == 0) Crash("Cannot create a pallette of size 0.");
+        if(palleteSize == 0) Crash("Cannot create a pallete of size 0.");
 
-        Color[] fullpallette = GetColorsInImage(source);
+        Color[] fullPallete = GetColorsInImage(source);
 
-        if(palletteSize > fullpallette.Length) palletteSize = fullpallette.Length;
+        if(palleteSize > fullPallete.Length) palleteSize = fullPallete.Length;
 
-        Color[] cleanedpallette = CleanSimilarColorsFromList(fullpallette, cleanupStrength);
-        if(cleanedpallette.Length < palletteSize) for(int i = cleanupStrength; i == 0 || cleanedpallette.Length > palletteSize; i--) cleanedpallette = CleanSimilarColorsFromList(fullpallette, i);
+        Color[] cleanedPallete = CleanSimilarColorsFromList(fullPallete, cleanupStrength);
+        if(cleanedPallete.Length < palleteSize) for(int i = cleanupStrength; i == 0 || cleanedPallete.Length > palleteSize; i--) cleanedPallete = CleanSimilarColorsFromList(fullPallete, i);
         
-        return cleanedpallette.Take(palletteSize).OrderBy(c => c.GetHue()).ToArray();
+        return cleanedPallete.Take(palleteSize).OrderBy(c => c.GetHue()).ToArray();
     }
   
     static Bitmap CreateStripedImage(int stripeWidth, int height, params Color[] stripeColors)
@@ -159,7 +159,7 @@ using System.Runtime.Versioning;
         return image;
     }
     
-    static void Handler_TextOutput(FileInfo read, int palletteSize, int dissimilarity, ColorFormatting formatting)
+    static void Handler_TextOutput(FileInfo read, int palleteSize, int dissimilarity, ColorFormatting formatting)
     {
         (double h, double s, double v) ColorToHSV(Color color)
         {
@@ -176,10 +176,10 @@ using System.Runtime.Versioning;
         using FileStream fs = read.OpenRead(); 
         using Bitmap loadedImage = new(fs);
 
-        Color[] pallette = GetSimplifiedpallette(loadedImage, palletteSize, dissimilarity);
+        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize, dissimilarity);
         StringBuilder result = new();
 
-        foreach(Color color in pallette) switch(formatting)
+        foreach(Color color in pallete) switch(formatting)
         {
             case ColorFormatting.RGB: result.Append($"R: {color.R.ToString().PadLeft(3, '0')} | G: {color.G.ToString().PadLeft(3, '0')} | B: {color.B.ToString().PadLeft(3, '0')}\n"); break;
 
@@ -194,7 +194,7 @@ using System.Runtime.Versioning;
         Console.Write(result.ToString());
     }
 
-    static void Handler_ImageOutput(FileInfo read, int palletteSize, int dissimilarity, FileInfo save, int stripeWidth, int stripeHeight)
+    static void Handler_ImageOutput(FileInfo read, int palleteSize, int dissimilarity, FileInfo save, int stripeWidth, int stripeHeight)
     {       
         string savePath = save.FullName;
         if(savePath.Contains('.')) savePath = savePath.Substring(0, savePath.LastIndexOf('.'));
@@ -211,9 +211,9 @@ using System.Runtime.Versioning;
         using FileStream fs = read.OpenRead(); 
         using Bitmap loadedImage = new(fs);
 
-        Color[] pallette = GetSimplifiedpallette(loadedImage, palletteSize, dissimilarity);
-        if(pallette.Length == 0) Crash("Unexpected error.");
-        using Bitmap output = CreateStripedImage(stripeWidth, stripeHeight, pallette);
+        Color[] pallete = GetSimplifiedPallete(loadedImage, palleteSize, dissimilarity);
+        if(pallete.Length == 0) Crash("Unexpected error.");
+        using Bitmap output = CreateStripedImage(stripeWidth, stripeHeight, pallete);
         output.Save(savePath, ImageFormat.Png);
     }
 

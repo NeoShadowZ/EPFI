@@ -1,5 +1,5 @@
 # EPFI
-**Extract pallette From Image** - A .NET based terminal utility for windows that allows you to get a color pallette from an image file.
+**Extract Pallete From Image** - A .NET based terminal utility for windows that allows you to get a color pallete from an image file.
 
 ## Packages used:
 - System.Drawing.Common
